@@ -22,7 +22,7 @@ import google.generativeai as genai
 
 # 2. GEMINI SETUP
 
-API_KEY = "ENTER_YOUR_KEY"
+API_KEY = "ENTER_YOUR_API_KEY"
 genai.configure(api_key=API_KEY)
 model_ai = genai.GenerativeModel("gemini-2.5-flash")
 
@@ -264,70 +264,35 @@ def analyze_transaction(row, recent_fraud_spike=False):
 
     return risk_level, final_risk_score
 
-# ======================
-# 8. MULTI-AGENT GEMINI AI WORKFLOW (WITH RAG & RATE-LIMIT CACHING)
-# ======================
+# 8. MULTI-AGENT GEMINI AI WORKFLOW
 
-# Simulated Threat Intelligence Database (RAG Source)
-THREAT_DB = {
-    "192.168.1.100": "Clean history. Known residential proxy.",
-    "45.22.19.11": "WARNING: IP address associated with recent dark web credential stuffing botnet (AlphaBay leaks).",
-    "103.44.2.99": "CRITICAL THREAT: Known exit node for Tor network. High correlation with anonymous cybercrime.",
-    "77.100.5.55": "Clean history. Standard mobile carrier gateway.",
-    "188.4.3.2": "WARNING: Merchant ID flagged in recent Telegram fraud channels for card tumbling."
-}
-
-MOCK_MERCHANTS = ["Amazon.com", "Unknown VPN Provider", "CryptoExchange LLC", "Local Grocery", "Luxury Watches Inc."]
-MOCK_IPS = list(THREAT_DB.keys())
-
-# Cache dictionaries to prevent hitting the 15 RPM free tier limit
-_cache_ai_report = {}
-_cache_sar = {}
-_cache_customer = {}
-
-def get_ai_explanation(sample, risk, confidence, merchant, ip_address):
+def get_ai_explanation(sample, risk, confidence):
     if risk == "LOW":
         return "Low risk transaction. No major concern."
 
-    # RAG Retrieval: Look up the IP in the threat database
-    rag_context = THREAT_DB.get(ip_address, "No threat intelligence records found for this IP.")
-
-    cache_key = f"{risk}_{int(confidence/10)}_{ip_address}"
-    if cache_key in _cache_ai_report:
-        return _cache_ai_report[cache_key]
-
     prompt = f"""
-You are an expert Anti-Money Laundering analyst with access to a Retrieval-Augmented Generation (RAG) threat database.
+You are an expert Anti-Money Laundering analyst.
 
 Transaction Details:
 Amount: ${sample[-1]:.2f}
 Time: {sample[0]:.2f}
-Merchant: {merchant}
-IP Address: {ip_address}
 System Risk Level: {risk}
 Hybrid Risk Score: {confidence:.1f}%
-
-[RAG THREAT INTELLIGENCE FEED]:
-{rag_context}
 
 You have access to a Model Fusion setup (XGBoost + Logistic Regression + PyTorch Autoencoder + Isolation Forest). 
 Analyze the data above and explain briefly:
 1. Why this transaction tripped the ensemble detection models.
-2. How the RAG Threat Intelligence context elevates the specific real-world AML risk severity this represents.
+2. The specific real-world AML risk severity this represents.
 3. Suggested immediate action for the human analyst (e.g. freeze account, SAR filing, contact customer).
 
 Format the output clearly with bullet points. Keep it professional, analytical, and short.
 """
     try:
         response = model_ai.generate_content(prompt)
-        _cache_ai_report[cache_key] = response.text
         return response.text
     except Exception as e:
         print("⚠ Gemini error:", e)
-        return (f"• TRANSACTION FLAGGED BY ENSEMBLE AI\n"
-                f"• Risk Severity: {risk} (Score: {confidence:.1f}%)\n"
-                f"• The Autoencoder detected anomalous reconstruction error while the Ensemble model confirmed irregular spending patterns.\n"
-                f"• ACTION REQUIRED: Immediate manual review of account history recommended.")
+        return "AI explanation unavailable (Gemini quota/rate limit/connection error)."
 
 def generate_network_alert(spike_info):
     prompt = f"""
@@ -340,16 +305,12 @@ Keep it punchy and professional.
         response = model_ai.generate_content(prompt)
         return response.text
     except Exception as e:
-        return f"🚨 SOC ALERT: Unusual volume of deep-pattern anomalies detected ({spike_info}). Recommend immediate transition to Strict Risk Calibration."
+        return "SOC ALERT: Unusual volume detected. Enable strict mode."
 
 def generate_sar_narrative(sample, risk, confidence, ai_explanation):
     if risk == "LOW":
         return "Not applicable."
     
-    cache_key = f"{risk}_{int(confidence/10)}"
-    if cache_key in _cache_sar:
-        return _cache_sar[cache_key]
-
     prompt = f"""
 You are an expert Anti-Money Laundering (AML) compliance officer.
 Based on the following transaction and AI analysis, draft a formal Suspicious Activity Report (SAR) narrative.
@@ -369,19 +330,11 @@ Draft this in a highly professional, legal, and compliance-oriented tone. Keep i
 """
     try:
         response = model_ai.generate_content(prompt)
-        _cache_sar[cache_key] = response.text
         return response.text
     except Exception as e:
-        return (f"Suspicious Activity Report (Internal Draft)\n\n"
-                f"This report documents a {risk}-risk transaction of ${sample[-1]:.2f} flagged by the ensemble detection system with a confidence of {confidence:.1f}%. "
-                f"The transaction deviated significantly from historical baselines across multiple vectors. Pending further investigation, "
-                f"this activity warrants regulatory reporting under AML protocols.")
+        return "SAR draft unavailable."
 
 def draft_customer_alert_email(sample):
-    cache_key = f"{int(sample[-1]/100)}"
-    if cache_key in _cache_customer:
-        return _cache_customer[cache_key]
-
     prompt = f"""
 Draft a short, polite, and professional SMS/Email to a bank customer to verify a recent potentially suspicious transaction.
 Transaction Amount: ${sample[-1]:.2f}
@@ -389,187 +342,61 @@ Do not mention fraud or AI directly, just ask them to verify if they made this t
 """
     try:
         response = model_ai.generate_content(prompt)
-        _cache_customer[cache_key] = response.text
         return response.text
     except Exception as e:
-        return f"Govinda AI Security: Did you attempt a recent transaction of ${sample[-1]:.2f}? Reply 1 for YES, 2 for NO. If you do not reply, your card may be temporarily restricted."
+        return "Customer message unavailable."
 
-# 9. FASTAPI BACKEND SERVER
+# 9. REAL-TIME SIMULATION DEMO WITH GEN AI AGENTS
 
-from fastapi import FastAPI, HTTPException, Request
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
-from pydantic import BaseModel
-import random
-import uuid
+print("\n🚨 INITIALIZING REAL-TIME AML MONITORING STREAM...\n")
 
-app = FastAPI(title="Fraud Intelligence Center API")
+# Simulate fake live transactions scrolling by
+for i in range(5):
+    amt = random.uniform(1.0, 500.0)
+    print(f"[{time.strftime('%H:%M:%S')}] Processing Txn #{10492 + i} | Amount: ${amt:.2f} | Status: ✅ CLEAR (Low Risk)")
+    time.sleep(0.8)
 
-# Allow CORS for React frontend
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"], # In production, restrict this to your frontend URL
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+print(f"\n⚠️ SYSTEM ALERT: UNUSUAL VOLUME DETECTED ACROSS NETWORK")
+print("🤖 Gemini AI evaluating network threat level...")
+time.sleep(1)
+soc_alert = generate_network_alert("300% spike in flagged international transfers")
+print(f"📡 SOC NOTIFICATION: {soc_alert}\n")
 
-class TransactionRequest(BaseModel):
-    time: float
-    amount: float
-    v_features: list[float] = [0.0] * 28 # Default to 0s if not provided
-    strict_mode: bool = False
+print(f"⚙️ ENABLING DYNAMIC RISK SCORING (STRICT MODE)...\n")
+time.sleep(1.5)
 
-@app.get("/api/simulate")
-async def simulate_transaction(strict: bool = False):
-    """Fetches a random transaction from the dataset and analyzes it."""
-    # 30% chance of pulling a fraud transaction for the demo to make it interesting
-    is_fraud_demo = random.random() < 0.3
-    
-    if is_fraud_demo:
-        fraud_txns = X[y == 1]
-        idx = random.randint(0, len(fraud_txns) - 1)
-        sample = fraud_txns.iloc[idx].values
-    else:
-        normal_txns = X[y == 0]
-        idx = random.randint(0, len(normal_txns) - 1)
-        sample = normal_txns.iloc[idx].values
+print(f"[{time.strftime('%H:%M:%S')}] Processing Txn #{10497} | Amount: $UNKNOWN | Status: ⚠ ANALYZING...")
+time.sleep(1.5)
 
-    # Run Analysis
-    risk_level, final_risk_score = analyze_transaction(sample, recent_fraud_spike=strict)
+# Grabbing a real fraud transaction from the dataset to trigger the alert
+sample = X[y == 1].iloc[0].values
 
-    # Assign random mock RAG metadata
-    merchant = random.choice(MOCK_MERCHANTS)
-    ip_address = random.choice(MOCK_IPS)
+# We pass True to trigger the Dynamic Risk Calibration
+risk, prob = analyze_transaction(sample, recent_fraud_spike=True)
 
-    response_data = {
-        "id": str(uuid.uuid4())[:8],
-        "amount": float(sample[-1]),
-        "time": float(sample[0]),
-        "risk_level": risk_level,
-        "score": float(final_risk_score),
-        "merchant": merchant,
-        "ip_address": ip_address
-    }
+print("\n" + "="*50)
+print("🚨 AML FRAUD ALERT TRIGGERED 🚨")
+print("="*50)
+print(f"Risk Level:         {risk}")
+print(f"Hybrid Risk Score:  {prob:.1f}%")
+print("="*50)
 
-    # If high risk, generate AI reports
-    if risk_level in ["HIGH", "CRITICAL"]:
-        ai_report = get_ai_explanation(sample, risk_level, final_risk_score, merchant, ip_address)
-        sar_draft = generate_sar_narrative(sample, risk_level, final_risk_score, ai_report)
-        customer_msg = draft_customer_alert_email(sample)
-        
-        response_data.update({
-            "ai_report": ai_report,
-            "sar_draft": sar_draft,
-            "customer_msg": customer_msg
-        })
+print("\n⚙️ AI AGENT 1: Generating Smart AI Explanation via Gemini...")
+time.sleep(2)
+ai_report = get_ai_explanation(sample, risk, prob)
+print("\n📄 AI EXPLANATION:\n")
+print(ai_report)
 
-    return response_data
+print("\n⚙️ AI AGENT 2: Drafting Official Suspicious Activity Report (SAR) via Gemini...")
+time.sleep(2)
+sar_draft = generate_sar_narrative(sample, risk, prob, ai_report)
+print("\n📝 SAR DRAFT:\n")
+print(sar_draft)
 
-@app.post("/api/analyze/manual")
-async def analyze_manual(request: TransactionRequest):
-    """Analyzes a manually inputted transaction."""
-    if len(request.v_features) != 28:
-        raise HTTPException(status_code=400, detail="Must provide exactly 28 V features")
-        
-    sample = np.array([request.time] + request.v_features + [request.amount])
-    risk_level, final_risk_score = analyze_transaction(sample, recent_fraud_spike=request.strict_mode)
-    
-    # Assign random mock RAG metadata
-    merchant = random.choice(MOCK_MERCHANTS)
-    ip_address = random.choice(MOCK_IPS)
+print("\n⚙️ AI AGENT 3: Drafting Customer Verification Message via Gemini...")
+time.sleep(2)
+customer_msg = draft_customer_alert_email(sample)
+print("\n✉️ CUSTOMER COMMUNICATION DRAFT:\n")
+print(customer_msg)
 
-    response_data = {
-        "id": str(uuid.uuid4())[:8],
-        "amount": request.amount,
-        "time": request.time,
-        "risk_level": risk_level,
-        "score": float(final_risk_score),
-        "merchant": merchant,
-        "ip_address": ip_address
-    }
-
-    if risk_level in ["HIGH", "CRITICAL"]:
-        ai_report = get_ai_explanation(sample, risk_level, final_risk_score, merchant, ip_address)
-        sar_draft = generate_sar_narrative(sample, risk_level, final_risk_score, ai_report)
-        customer_msg = draft_customer_alert_email(sample)
-        
-        response_data.update({
-            "ai_report": ai_report,
-            "sar_draft": sar_draft,
-            "customer_msg": customer_msg
-        })
-
-    return response_data
-
-from fastapi import UploadFile, File
-import io
-
-@app.post("/api/analyze/batch")
-async def analyze_batch(file: UploadFile = File(...), strict_mode: bool = False):
-    if not file.filename.endswith('.csv'):
-        raise HTTPException(status_code=400, detail="Invalid file type. Please upload a CSV.")
-        
-    contents = await file.read()
-    try:
-        df_batch = pd.read_csv(io.StringIO(contents.decode('utf-8')))
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Error parsing CSV: {str(e)}")
-        
-    # Check if required columns exist
-    missing_cols = [col for col in features if col not in df_batch.columns]
-    
-    # Fill missing features with 0.0, even if all V features are missing
-    for col in missing_cols:
-        df_batch[col] = 0.0
-            
-    if "Amount" not in df_batch.columns or "Time" not in df_batch.columns:
-        raise HTTPException(status_code=400, detail="Uploaded CSV must contain 'Time' and 'Amount' columns.")
-        
-    X_batch = df_batch[features]
-    limit = min(len(X_batch), 1000)
-    X_batch_limited = X_batch.iloc[:limit]
-    
-    results = []
-    
-    for i in range(len(X_batch_limited)):
-        row_vals = X_batch_limited.iloc[i].values
-        lvl, prob = analyze_transaction(row_vals, recent_fraud_spike=strict_mode)
-        
-        # Assign random mock RAG metadata
-        merchant = random.choice(MOCK_MERCHANTS)
-        ip_address = random.choice(MOCK_IPS)
-
-        res = {
-            "id": i,
-            "time": float(row_vals[0]),
-            "amount": float(row_vals[-1]),
-            "risk_level": lvl,
-            "score": float(prob),
-            "merchant": merchant,
-            "ip_address": ip_address
-        }
-        
-        # If it's a high risk transaction, get an AI report for it right away
-        if lvl in ['HIGH', 'CRITICAL']:
-            # We'll put a small delay between requests to avoid totally blowing out 
-            # the free Gemini tier rate limit if there's a huge batch of fraud
-            import time
-            time.sleep(1.5) 
-            ai_report = get_ai_explanation(row_vals, lvl, prob, merchant, ip_address)
-            res['ai_report'] = ai_report
-            
-        results.append(res)
-        
-    return {
-        "status": "success",
-        "total_analyzed": len(results),
-        "total_flagged": len([r for r in results if r['risk_level'] in ['HIGH', 'CRITICAL']]),
-        "highest_risk_analysis": None,
-        "results": results
-    }
-
-if __name__ == "__main__":
-    import uvicorn
-    print("\n🚀 Starting FastAPI Backend Server on port 8000...")
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+print("\n✅ SYSTEM COMPLETE")
